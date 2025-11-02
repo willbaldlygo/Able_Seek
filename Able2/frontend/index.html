@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Able2 - Multi-Agent AI Assistant</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>Able2</h1>
+            <p class="subtitle">Multi-Agent AI Assistant</p>
+            <div class="controls">
+                <label for="autonomy">Autonomy:</label>
+                <select id="autonomy">
+                    <option value="conservative">Conservative</option>
+                    <option value="moderate" selected>Moderate</option>
+                    <option value="aggressive">Aggressive</option>
+                </select>
+
+                <label for="sources">Sources:</label>
+                <select id="sources" multiple>
+                    <option value="documents" selected>Documents</option>
+                    <option value="emails">Emails (Phase 2)</option>
+                    <option value="calendar">Calendar (Phase 2)</option>
+                </select>
+
+                <button id="upload-btn" class="btn btn-secondary">Upload Document</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main>
+            <!-- Chat Messages -->
+            <div id="chat-container">
+                <div id="messages"></div>
+            </div>
+
+            <!-- Input Area -->
+            <div id="input-area">
+                <textarea
+                    id="user-input"
+                    placeholder="Ask me anything..."
+                    rows="3"
+                ></textarea>
+                <button id="send-btn" class="btn btn-primary">Send</button>
+            </div>
+
+            <!-- Status Bar -->
+            <div id="status-bar">
+                <span id="status-text">Ready</span>
+                <span id="session-info"></span>
+            </div>
+        </main>
+
+        <!-- Sidebar (optional - for later phases) -->
+        <aside class="hidden">
+            <h3>Agent Activity</h3>
+            <div id="agent-activity"></div>
+        </aside>
+    </div>
+
+    <!-- Upload Modal -->
+    <div id="upload-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Upload Document</h2>
+            <input type="file" id="file-input" accept=".pdf,.txt,.md">
+            <div id="upload-status"></div>
+            <button id="upload-submit" class="btn btn-primary">Upload</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

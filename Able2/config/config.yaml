@@ -1,0 +1,295 @@
+# Able2 Configuration File
+# This extends the original Able mk I config with new agent and integration settings
+
+# ============================================================================
+# LLM Configuration (Preserved from Able1)
+# ============================================================================
+llm:
+  provider: anthropic  # anthropic or ollama
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.7
+  max_tokens: 4000
+
+  # Ollama fallback configuration
+  ollama:
+    base_url: http://localhost:11434
+    default_model: llama3.2
+    embedding_model: nomic-embed-text
+
+# ============================================================================
+# Retrieval Configuration (Preserved from Able1)
+# ============================================================================
+retrieval:
+  # Vector search
+  top_k: 10
+  similarity_threshold: 0.7
+
+  # Reranking
+  use_reranking: true
+  reranker_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+  reranker_top_k: 5
+
+  # Chunking strategy
+  chunk_size: 1000
+  chunk_overlap: 200
+  use_parent_chunks: true
+  parent_chunk_size: 2000
+
+  # BM25 lexical search
+  bm25_weight: 0.3
+  vector_weight: 0.7
+
+  # Hybrid search
+  combine_method: reciprocal_rank_fusion  # or linear_combination
+
+# ============================================================================
+# GraphRAG Configuration (Preserved from Able1)
+# ============================================================================
+graphrag:
+  enabled: true
+  community_levels: 3
+  entity_extraction_model: ${llm.model}  # Use same model as main LLM
+  max_graph_tokens: 8000
+
+  # Graph database
+  neo4j:
+    enabled: false  # Using in-memory graph for now
+    uri: bolt://localhost:7687
+    user: neo4j
+    password: neo4j
+
+# ============================================================================
+# Agent Configuration (NEW in Able2)
+# ============================================================================
+agents:
+  enabled: true  # Set to false to use Able1 mode (no orchestration)
+
+  # Orchestrator - Main intelligence
+  orchestrator:
+    model: claude-3-5-sonnet-20241022
+    provider: anthropic
+    temperature: 0.7
+    max_retries: 3
+    timeout_seconds: 30
+
+  # Memory Agent - Knowledge retrieval (wraps Able1 retrieval)
+  memory:
+    model: llama3.2  # Fast local model for search
+    provider: ollama
+    temperature: 0.3  # Lower temp for factual retrieval
+    max_retries: 2
+    timeout_seconds: 20
+
+  # Context Agent - Calendar/email awareness
+  context:
+    model: llama3.2
+    provider: ollama
+    temperature: 0.5
+    max_retries: 2
+    timeout_seconds: 15
+
+  # Execution Agent - Actions with side effects
+  execution:
+    model: claude-3-5-sonnet-20241022
+    provider: anthropic
+    temperature: 0.5
+    max_retries: 2
+    timeout_seconds: 60
+
+# ============================================================================
+# Autonomy Configuration (NEW in Able2)
+# ============================================================================
+autonomy:
+  default_level: moderate  # conservative, moderate, aggressive
+
+  # Actions that always require confirmation regardless of autonomy level
+  always_confirm:
+    - send_email
+    - execute_code
+
+  # Actions that never require confirmation (safe read operations)
+  never_confirm:
+    - search_documents
+    - analyze_calendar
+
+  # Conservative mode: Ask before everything except never_confirm
+  # Moderate mode: Auto-execute searches, ask for actions with side effects
+  # Aggressive mode: Auto-execute most actions, only ask for always_confirm
+
+# ============================================================================
+# Database Configuration (NEW in Able2)
+# ============================================================================
+database:
+  # PostgreSQL
+  url: postgresql://able2:able2password@localhost:5432/able2
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+
+  # Redis (for caching and task queues)
+  redis_url: redis://localhost:6379/0
+  redis_ttl: 3600  # Cache TTL in seconds
+
+# ============================================================================
+# Integration Configuration (NEW in Able2)
+# ============================================================================
+integrations:
+  # Gmail
+  gmail:
+    enabled: false  # Enable in Phase 2
+    credentials_path: ./config/gmail_credentials.json
+    token_path: ./config/gmail_token.json
+    scopes:
+      - https://www.googleapis.com/auth/gmail.readonly
+      - https://www.googleapis.com/auth/gmail.send
+    sync_interval_minutes: 15
+    max_threads_per_sync: 50
+
+  # Google Calendar
+  calendar:
+    enabled: false  # Enable in Phase 2
+    credentials_path: ./config/calendar_credentials.json
+    token_path: ./config/calendar_token.json
+    scopes:
+      - https://www.googleapis.com/auth/calendar.readonly
+      - https://www.googleapis.com/auth/calendar.events
+    sync_interval_minutes: 10
+    lookahead_days: 7
+
+  # SearxNG (private web search)
+  searxng:
+    enabled: true
+    url: http://localhost:8080
+    timeout_seconds: 10
+    max_results: 10
+
+  # Web browsing (Selenium)
+  web_browser:
+    enabled: false  # Enable in Phase 3
+    headless: true
+    timeout_seconds: 30
+    user_agent: "Able2/1.0"
+
+# ============================================================================
+# Task Management Configuration (NEW in Able2 - ADHD Support)
+# ============================================================================
+task_management:
+  enabled: true
+
+  # Energy level detection
+  energy_tracking:
+    enabled: true
+    factors:
+      - time_of_day
+      - meeting_density
+      - task_completion_rate
+
+  # Task scheduling
+  scheduling:
+    prefer_deep_work_morning: true
+    max_context_switches_per_day: 4
+    default_break_duration_minutes: 15
+    pomodoro_duration_minutes: 25
+
+  # Priority scoring
+  priority:
+    deadline_weight: 0.4
+    energy_match_weight: 0.3
+    estimated_duration_weight: 0.3
+
+# ============================================================================
+# File Paths (Preserved from Able1)
+# ============================================================================
+paths:
+  # Data directories
+  vector_store: ./Able2/data/vector_store
+  graph_store: ./Able2/data/graph_store
+  uploads: ./Able2/data/uploads
+
+  # Database
+  database_dir: ./Able2/data/database
+
+  # Logs
+  logs: ./Able2/logs
+
+  # Temp files
+  temp: ./Able2/temp
+
+# ============================================================================
+# API Configuration
+# ============================================================================
+api:
+  host: 0.0.0.0
+  port: 8000
+  reload: true  # Dev mode
+  workers: 1
+
+  # CORS
+  cors:
+    enabled: true
+    origins:
+      - http://localhost:3001
+      - http://127.0.0.1:3001
+
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+
+  # Session
+  session_timeout_minutes: 60
+
+# ============================================================================
+# Logging Configuration
+# ============================================================================
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Log to file
+  file:
+    enabled: true
+    path: ./Able2/logs/able2.log
+    max_bytes: 10485760  # 10MB
+    backup_count: 5
+
+  # Agent action logging
+  agent_logging:
+    enabled: true
+    log_all_messages: true
+    log_to_database: true
+
+# ============================================================================
+# Feature Flags
+# ============================================================================
+features:
+  # Phase 1 features
+  multi_agent_system: true
+  database_persistence: true
+
+  # Phase 2 features (disabled for now)
+  gmail_integration: false
+  calendar_integration: false
+  multi_source_search: false
+
+  # Phase 3 features (disabled for now)
+  web_browsing: false
+  code_execution: false
+  autonomous_task_management: false
+
+# ============================================================================
+# Development/Testing
+# ============================================================================
+dev:
+  # Mock external services for testing
+  mock_gmail: true
+  mock_calendar: true
+  mock_web_search: false
+
+  # Debug settings
+  debug_agent_messages: false
+  debug_retrieval: false
+
+  # Test data
+  use_test_data: false
+  test_data_path: ./Able2/tests/fixtures

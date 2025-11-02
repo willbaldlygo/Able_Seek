@@ -1,0 +1,463 @@
+"""
+Main FastAPI application for Able2.
+
+Combines Able mk I endpoints with new agent-based endpoints.
+"""
+
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+import uuid
+from pathlib import Path
+from datetime import datetime
+
+from backend.core import (
+    settings, api_logger, init_database,
+    check_database_connection, get_db
+)
+from backend.schemas import (
+    ChatRequestV2, ChatResponseV2,
+    ChatRequestEnhanced, ChatResponseEnhanced,
+    DocumentUploadResponse, DocumentListResponse,
+    ModelInfo, ModelListResponse, ModelSwitchRequest, ModelSwitchResponse,
+    GraphBuildRequest, GraphBuildResponse,
+    GraphQueryRequest, GraphQueryResponse,
+    ErrorResponse, HealthCheckResponse,
+    AgentType, AgentMessage, AutonomyLevel
+)
+from backend.agents import OrchestratorAgent, MemoryAgent
+from backend.knowledge import get_hybrid_retriever
+from backend.models import get_or_create_default_user, Session as ChatSession, AgentAction
+
+# Create FastAPI app
+app = FastAPI(
+    title="Able2 API",
+    description="Multi-agent AI assistant with advanced retrieval",
+    version="2.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize components on startup
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database and check connections."""
+    api_logger.info("Starting Able2 API...")
+
+    # Initialize database
+    try:
+        init_database()
+        api_logger.info("Database initialized")
+    except Exception as e:
+        api_logger.error(f"Database initialization failed: {str(e)}")
+
+    # Check database connection
+    if check_database_connection():
+        api_logger.info("Database connection OK")
+    else:
+        api_logger.warning("Database connection failed")
+
+    api_logger.info("Able2 API started successfully")
+
+
+# ============================================================================
+# Health Check
+# ============================================================================
+
+@app.get("/health", response_model=HealthCheckResponse)
+async def health_check():
+    """Health check endpoint."""
+    db_ok = check_database_connection()
+
+    status = "ok" if db_ok else "degraded"
+
+    return HealthCheckResponse(
+        status=status,
+        version="2.0.0",
+        services={
+            "database": "ok" if db_ok else "error",
+            "vector_store": "ok",
+            "agents": "ok"
+        },
+        timestamp=datetime.now()
+    )
+
+
+# ============================================================================
+# NEW: Agent-based Chat (v2)
+# ============================================================================
+
+@app.post("/chat/v2", response_model=ChatResponseV2)
+async def chat_v2(request: ChatRequestV2, db: Session = Depends(get_db)):
+    """
+    NEW orchestrator-based chat endpoint.
+
+    This is the recommended endpoint for Able2.
+    Routes through the agent system for intelligent orchestration.
+    """
+    api_logger.info(f"Chat v2: '{request.message[:50]}...'")
+
+    try:
+        # Get or create user
+        user = get_or_create_default_user(db)
+
+        # Get or create session
+        if request.session_id:
+            session = db.query(ChatSession).filter(
+                ChatSession.session_id == request.session_id
+            ).first()
+
+            if not session:
+                session = ChatSession(
+                    session_id=request.session_id,
+                    user_id=user.id,
+                    autonomy_level=request.autonomy_level
+                )
+                db.add(session)
+                db.commit()
+        else:
+            # Create new session
+            session_id = str(uuid.uuid4())
+            session = ChatSession(
+                session_id=session_id,
+                user_id=user.id,
+                autonomy_level=request.autonomy_level,
+                title=request.message[:50]
+            )
+            db.add(session)
+            db.commit()
+
+        # Create orchestrator
+        autonomy = AutonomyLevel(request.autonomy_level)
+        orchestrator = OrchestratorAgent(autonomy_level=autonomy)
+
+        # Create agent message
+        message = AgentMessage(
+            from_agent=AgentType.USER,
+            to_agent=AgentType.ORCHESTRATOR,
+            content=request.message,
+            metadata={
+                "sources": request.sources,
+                "context": request.context
+            }
+        )
+
+        # Process through orchestrator
+        response = await orchestrator.process(message)
+
+        # Log agent action
+        action = AgentAction(
+            session_id=session.id,
+            agent_type=AgentType.ORCHESTRATOR.value,
+            action_type="orchestrate",
+            input_data={"message": request.message},
+            output_data=response.data,
+            reasoning=response.reasoning,
+            success=response.success
+        )
+        db.add(action)
+        db.commit()
+
+        # Update session
+        session.message_count += 1
+        session.updated_at = datetime.now()
+        db.commit()
+
+        # Format response
+        return ChatResponseV2(
+            success=response.success,
+            message=response.data.get("message", ""),
+            reasoning=response.reasoning,
+            sources=response.data.get("sources"),
+            requires_confirmation=response.requires_confirmation,
+            suggested_actions=[response.next_action] if response.next_action else None,
+            session_id=session.session_id,
+            agent_actions=[{
+                "agent": response.agent_type.value,
+                "success": response.success,
+                "reasoning": response.reasoning
+            }]
+        )
+
+    except Exception as e:
+        api_logger.error(f"Chat v2 failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Legacy: Able1 Chat Endpoints (Preserved for compatibility)
+# ============================================================================
+
+@app.post("/chat/enhanced", response_model=ChatResponseEnhanced)
+async def chat_enhanced(request: ChatRequestEnhanced, db: Session = Depends(get_db)):
+    """
+    Legacy Able1 enhanced chat endpoint.
+    Uses hybrid retrieval directly without agent orchestration.
+
+    Preserved for backward compatibility.
+    """
+    api_logger.info(f"Chat enhanced (legacy): '{request.message[:50]}...'")
+
+    try:
+        # Get hybrid retriever
+        retriever = get_hybrid_retriever()
+
+        # Search
+        results = await retriever.search(
+            query=request.message,
+            top_k=request.top_k,
+            use_reranking=True,
+            include_graph=request.use_graph
+        )
+
+        # Create simple response (no LLM synthesis in legacy mode)
+        if results:
+            response_text = f"Found {len(results)} relevant sources."
+        else:
+            response_text = "No relevant sources found."
+
+        # Get or create session
+        session_id = request.session_id or str(uuid.uuid4())
+
+        return ChatResponseEnhanced(
+            response=response_text,
+            sources=results,
+            session_id=session_id
+        )
+
+    except Exception as e:
+        api_logger.error(f"Chat enhanced failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Document Management
+# ============================================================================
+
+@app.post("/upload", response_model=DocumentUploadResponse)
+async def upload_document(file: UploadFile = File(...)):
+    """
+    Upload a document for processing.
+
+    Supports PDF and text files.
+    """
+    api_logger.info(f"Upload: {file.filename}")
+
+    try:
+        # Save uploaded file
+        upload_dir = Path(settings.path_uploads)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path = upload_dir / file.filename
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        # Process document through Memory Agent
+        memory_agent = MemoryAgent()
+        response = await memory_agent.add_document(str(file_path))
+
+        if response.success:
+            return DocumentUploadResponse(
+                success=True,
+                document_id=response.data["document_id"],
+                filename=response.data["filename"],
+                num_chunks=response.data["num_chunks"],
+                message="Document uploaded and processed successfully"
+            )
+        else:
+            raise HTTPException(status_code=500, detail=response.error)
+
+    except Exception as e:
+        api_logger.error(f"Upload failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/documents", response_model=DocumentListResponse)
+async def list_documents():
+    """List all uploaded documents."""
+    try:
+        retriever = get_hybrid_retriever()
+        stats = retriever.get_statistics()
+
+        # For Phase 1, return statistics
+        # Full document listing in later phase
+        return DocumentListResponse(
+            documents=[],
+            total_count=stats.get("vector_store", {}).get("document_count", 0)
+        )
+
+    except Exception as e:
+        api_logger.error(f"List documents failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/documents/{document_id}")
+async def delete_document(document_id: str):
+    """Delete a document."""
+    try:
+        memory_agent = MemoryAgent()
+        response = await memory_agent.delete_document(document_id)
+
+        if response.success:
+            return {"success": True, "message": "Document deleted"}
+        else:
+            raise HTTPException(status_code=500, detail=response.error)
+
+    except Exception as e:
+        api_logger.error(f"Delete document failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Model Management
+# ============================================================================
+
+@app.get("/models", response_model=ModelListResponse)
+async def list_models():
+    """List available LLM models."""
+    models = [
+        ModelInfo(
+            model_id="claude-3-5-sonnet-20241022",
+            provider="anthropic",
+            display_name="Claude 3.5 Sonnet",
+            description="Most capable model",
+            context_window=200000,
+            is_active=settings.llm_provider == "anthropic"
+        ),
+        ModelInfo(
+            model_id="llama3.2",
+            provider="ollama",
+            display_name="Llama 3.2",
+            description="Fast local model",
+            context_window=8192,
+            is_active=settings.llm_provider == "ollama"
+        )
+    ]
+
+    active_model = f"{settings.llm_provider}/{settings.llm_model}"
+
+    return ModelListResponse(
+        models=models,
+        active_model=active_model
+    )
+
+
+@app.post("/models/switch", response_model=ModelSwitchResponse)
+async def switch_model(request: ModelSwitchRequest):
+    """Switch active LLM model."""
+    # In Phase 1, this is informational only
+    # Full switching requires runtime config updates
+
+    return ModelSwitchResponse(
+        success=True,
+        message=f"Model switch noted (restart required for Phase 1)",
+        active_model=f"{request.provider}/{request.model_id}"
+    )
+
+
+# ============================================================================
+# GraphRAG
+# ============================================================================
+
+@app.post("/graph/build", response_model=GraphBuildResponse)
+async def build_graph(request: GraphBuildRequest):
+    """Build or rebuild knowledge graph."""
+    try:
+        memory_agent = MemoryAgent()
+
+        message = AgentMessage(
+            from_agent=AgentType.USER,
+            to_agent=AgentType.MEMORY,
+            content="build_graph",
+            metadata={
+                "action_type": "build_graph",
+                "force_rebuild": request.force_rebuild
+            }
+        )
+
+        response = await memory_agent.process(message)
+
+        if response.success:
+            stats = response.data
+
+            return GraphBuildResponse(
+                success=True,
+                message="Graph built successfully",
+                num_entities=stats.get("num_entities", 0),
+                num_relationships=stats.get("num_relationships", 0),
+                num_communities=stats.get("num_communities", 0),
+                build_time_seconds=0.0  # Not tracked in Phase 1
+            )
+        else:
+            raise HTTPException(status_code=500, detail=response.error)
+
+    except Exception as e:
+        api_logger.error(f"Graph build failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/graph/query", response_model=GraphQueryResponse)
+async def query_graph(request: GraphQueryRequest):
+    """Query knowledge graph."""
+    try:
+        memory_agent = MemoryAgent()
+
+        message = AgentMessage(
+            from_agent=AgentType.USER,
+            to_agent=AgentType.MEMORY,
+            content=request.query,
+            metadata={
+                "action_type": "query_graph",
+                "max_tokens": request.max_tokens
+            }
+        )
+
+        response = await memory_agent.process(message)
+
+        if response.success:
+            return GraphQueryResponse(**response.data)
+        else:
+            raise HTTPException(status_code=500, detail=response.error)
+
+    except Exception as e:
+        api_logger.error(f"Graph query failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Info Endpoints
+# ============================================================================
+
+@app.get("/")
+async def root():
+    """Root endpoint with API information."""
+    return {
+        "name": "Able2 API",
+        "version": "2.0.0",
+        "description": "Multi-agent AI assistant",
+        "endpoints": {
+            "chat": "/chat/v2 (recommended), /chat/enhanced (legacy)",
+            "documents": "/upload, /documents, /documents/{id}",
+            "models": "/models, /models/switch",
+            "graph": "/graph/build, /graph/query",
+            "health": "/health"
+        }
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app,
+        host=settings.api_host,
+        port=settings.api_port,
+        reload=settings.api_reload
+    )

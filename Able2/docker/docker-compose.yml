@@ -1,0 +1,144 @@
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # PostgreSQL - Main database
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: able2-postgres
+    environment:
+      POSTGRES_DB: able2
+      POSTGRES_USER: able2
+      POSTGRES_PASSWORD: able2password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U able2"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - able2-network
+
+  # ==========================================================================
+  # Redis - Caching and task queue
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: able2-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - able2-network
+
+  # ==========================================================================
+  # SearxNG - Private web search
+  # ==========================================================================
+  searxng:
+    image: searxng/searxng:latest
+    container_name: able2-searxng
+    ports:
+      - "8080:8080"
+    volumes:
+      - searxng_data:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    networks:
+      - able2-network
+
+  # ==========================================================================
+  # Ollama - Local LLM server
+  # ==========================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: able2-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - able2-network
+    # Uncomment for GPU support
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ==========================================================================
+  # Able2 Backend
+  # ==========================================================================
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: able2-backend
+    depends_on:
+      - postgres
+      - redis
+      - ollama
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://able2:able2password@postgres:5432/able2
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - SEARXNG_URL=http://searxng:8080
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - ../Able2:/app/Able2
+      - ../config:/app/config
+    networks:
+      - able2-network
+    command: uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ==========================================================================
+  # Able2 Frontend
+  # ==========================================================================
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    container_name: able2-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3001:3001"
+    volumes:
+      - ../frontend:/app/frontend
+    networks:
+      - able2-network
+    command: python -m http.server 3001 --directory /app/frontend
+
+# ==============================================================================
+# Volumes
+# ==============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  searxng_data:
+    driver: local
+  ollama_data:
+    driver: local
+
+# ==============================================================================
+# Networks
+# ==============================================================================
+networks:
+  able2-network:
+    driver: bridge
