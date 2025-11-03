@@ -1,5 +1,7 @@
 # Able2 - Multi-Agent AI Assistant
 
+##Testing Claude Code's ability to manage a build directly from the mobile app.
+
 **Phase 1: Foundation & Multi-Agent Architecture**
 
 Able2 is an evolution of Able mk I, transforming a sophisticated PDF research assistant into a multi-agent autonomous AI system with advanced knowledge retrieval, context awareness, and intelligent orchestration.
