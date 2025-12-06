@@ -137,6 +137,12 @@ class Settings(BaseSettings):
         env="CORS_ORIGINS"
     )
 
+    # Rate Limiting
+    rate_limit_enabled: bool = Field(True, env="RATE_LIMIT_ENABLED")
+    rate_limit_per_minute: int = Field(60, env="RATE_LIMIT_PER_MINUTE")
+    rate_limit_chat_per_minute: int = Field(20, env="RATE_LIMIT_CHAT_PER_MINUTE")
+    rate_limit_upload_per_minute: int = Field(10, env="RATE_LIMIT_UPLOAD_PER_MINUTE")
+
     # ========================================================================
     # Logging Settings
     # ========================================================================

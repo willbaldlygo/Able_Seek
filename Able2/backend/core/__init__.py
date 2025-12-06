@@ -39,6 +39,15 @@ from .auth import (
     generate_api_key,
 )
 
+from .rate_limit import (
+    limiter,
+    setup_rate_limiting,
+    limit_default,
+    limit_chat,
+    limit_upload,
+    limit_custom,
+)
+
 __all__ = [
     # Config
     "settings",
@@ -68,4 +77,11 @@ __all__ = [
     "verify_api_key",
     "optional_api_key",
     "generate_api_key",
+    # Rate Limiting
+    "limiter",
+    "setup_rate_limiting",
+    "limit_default",
+    "limit_chat",
+    "limit_upload",
+    "limit_custom",
 ]

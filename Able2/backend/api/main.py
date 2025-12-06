@@ -4,7 +4,7 @@ Main FastAPI application for Able2.
 Combines Able mk I endpoints with new agent-based endpoints.
 """
 
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import uuid
@@ -19,7 +19,8 @@ ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.markdown', '.docx', '.doc'}
 
 from backend.core import (
     settings, api_logger, init_database,
-    check_database_connection, get_db, verify_api_key
+    check_database_connection, get_db, verify_api_key,
+    setup_rate_limiting, limiter, limit_chat, limit_upload, limit_default
 )
 from backend.schemas import (
     ChatRequestV2, ChatResponseV2,
@@ -50,6 +51,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Setup rate limiting
+setup_rate_limiting(app)
 
 # Initialize components on startup
 @app.on_event("startup")
@@ -113,8 +117,10 @@ async def health_check():
 # ============================================================================
 
 @app.post("/chat/v2", response_model=ChatResponseV2)
+@limiter.limit(f"{settings.rate_limit_chat_per_minute}/minute")
 async def chat_v2(
-    request: ChatRequestV2,
+    request: Request,
+    chat_request: ChatRequestV2,
     db: Session = Depends(get_db),
     api_key: str = Depends(verify_api_key)
 ):
@@ -124,23 +130,23 @@ async def chat_v2(
     This is the recommended endpoint for Able2.
     Routes through the agent system for intelligent orchestration.
     """
-    api_logger.info(f"Chat v2: '{request.message[:50]}...'")
+    api_logger.info(f"Chat v2: '{chat_request.message[:50]}...'")
 
     try:
         # Get or create user
         user = get_or_create_default_user(db)
 
         # Get or create session
-        if request.session_id:
+        if chat_request.session_id:
             session = db.query(ChatSession).filter(
-                ChatSession.session_id == request.session_id
+                ChatSession.session_id == chat_request.session_id
             ).first()
 
             if not session:
                 session = ChatSession(
-                    session_id=request.session_id,
+                    session_id=chat_request.session_id,
                     user_id=user.id,
-                    autonomy_level=request.autonomy_level
+                    autonomy_level=chat_request.autonomy_level
                 )
                 db.add(session)
                 db.commit()
@@ -150,24 +156,24 @@ async def chat_v2(
             session = ChatSession(
                 session_id=session_id,
                 user_id=user.id,
-                autonomy_level=request.autonomy_level,
-                title=request.message[:50]
+                autonomy_level=chat_request.autonomy_level,
+                title=chat_request.message[:50]
             )
             db.add(session)
             db.commit()
 
         # Create orchestrator
-        autonomy = AutonomyLevel(request.autonomy_level)
+        autonomy = AutonomyLevel(chat_request.autonomy_level)
         orchestrator = OrchestratorAgent(autonomy_level=autonomy)
 
         # Create agent message
         message = AgentMessage(
             from_agent=AgentType.USER,
             to_agent=AgentType.ORCHESTRATOR,
-            content=request.message,
+            content=chat_request.message,
             metadata={
-                "sources": request.sources,
-                "context": request.context
+                "sources": chat_request.sources,
+                "context": chat_request.context
             }
         )
 
@@ -179,7 +185,7 @@ async def chat_v2(
             session_id=session.id,
             agent_type=AgentType.ORCHESTRATOR.value,
             action_type="orchestrate",
-            input_data={"message": request.message},
+            input_data={"message": chat_request.message},
             output_data=response.data,
             reasoning=response.reasoning,
             success=response.success
@@ -220,8 +226,10 @@ async def chat_v2(
 # ============================================================================
 
 @app.post("/chat/enhanced", response_model=ChatResponseEnhanced)
+@limiter.limit(f"{settings.rate_limit_chat_per_minute}/minute")
 async def chat_enhanced(
-    request: ChatRequestEnhanced,
+    request: Request,
+    chat_request: ChatRequestEnhanced,
     db: Session = Depends(get_db),
     api_key: str = Depends(verify_api_key)
 ):
@@ -231,7 +239,7 @@ async def chat_enhanced(
 
     Preserved for backward compatibility.
     """
-    api_logger.info(f"Chat enhanced (legacy): '{request.message[:50]}...'")
+    api_logger.info(f"Chat enhanced (legacy): '{chat_request.message[:50]}...'")
 
     try:
         # Get hybrid retriever
@@ -239,10 +247,10 @@ async def chat_enhanced(
 
         # Search
         results = await retriever.search(
-            query=request.message,
-            top_k=request.top_k,
+            query=chat_request.message,
+            top_k=chat_request.top_k,
             use_reranking=True,
-            include_graph=request.use_graph
+            include_graph=chat_request.use_graph
         )
 
         # Create simple response (no LLM synthesis in legacy mode)
@@ -252,7 +260,7 @@ async def chat_enhanced(
             response_text = "No relevant sources found."
 
         # Get or create session
-        session_id = request.session_id or str(uuid.uuid4())
+        session_id = chat_request.session_id or str(uuid.uuid4())
 
         return ChatResponseEnhanced(
             response=response_text,
@@ -293,7 +301,9 @@ def validate_file_extension(filename: str) -> bool:
 
 
 @app.post("/upload", response_model=DocumentUploadResponse)
+@limiter.limit(f"{settings.rate_limit_upload_per_minute}/minute")
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     api_key: str = Depends(verify_api_key)
 ):
@@ -364,7 +374,8 @@ async def upload_document(
 
 
 @app.get("/documents", response_model=DocumentListResponse)
-async def list_documents(api_key: str = Depends(verify_api_key)):
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
+async def list_documents(request: Request, api_key: str = Depends(verify_api_key)):
     """List all uploaded documents."""
     try:
         retriever = get_hybrid_retriever()
@@ -385,7 +396,8 @@ async def list_documents(api_key: str = Depends(verify_api_key)):
 
 
 @app.delete("/documents/{document_id}")
-async def delete_document(document_id: str, api_key: str = Depends(verify_api_key)):
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
+async def delete_document(request: Request, document_id: str, api_key: str = Depends(verify_api_key)):
     """Delete a document."""
     try:
         memory_agent = MemoryAgent()
@@ -409,7 +421,8 @@ async def delete_document(document_id: str, api_key: str = Depends(verify_api_ke
 # ============================================================================
 
 @app.get("/models", response_model=ModelListResponse)
-async def list_models(api_key: str = Depends(verify_api_key)):
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
+async def list_models(request: Request, api_key: str = Depends(verify_api_key)):
     """List available LLM models."""
     models = [
         ModelInfo(
@@ -439,7 +452,8 @@ async def list_models(api_key: str = Depends(verify_api_key)):
 
 
 @app.post("/models/switch", response_model=ModelSwitchResponse)
-async def switch_model(request: ModelSwitchRequest, api_key: str = Depends(verify_api_key)):
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
+async def switch_model(request: Request, switch_request: ModelSwitchRequest, api_key: str = Depends(verify_api_key)):
     """Switch active LLM model."""
     # In Phase 1, this is informational only
     # Full switching requires runtime config updates
@@ -447,7 +461,7 @@ async def switch_model(request: ModelSwitchRequest, api_key: str = Depends(verif
     return ModelSwitchResponse(
         success=True,
         message=f"Model switch noted (restart required for Phase 1)",
-        active_model=f"{request.provider}/{request.model_id}"
+        active_model=f"{switch_request.provider}/{switch_request.model_id}"
     )
 
 
@@ -456,7 +470,8 @@ async def switch_model(request: ModelSwitchRequest, api_key: str = Depends(verif
 # ============================================================================
 
 @app.post("/graph/build", response_model=GraphBuildResponse)
-async def build_graph(request: GraphBuildRequest, api_key: str = Depends(verify_api_key)):
+@limiter.limit(f"{settings.rate_limit_upload_per_minute}/minute")  # Resource intensive
+async def build_graph(request: Request, build_request: GraphBuildRequest, api_key: str = Depends(verify_api_key)):
     """Build or rebuild knowledge graph."""
     try:
         memory_agent = MemoryAgent()
@@ -467,7 +482,7 @@ async def build_graph(request: GraphBuildRequest, api_key: str = Depends(verify_
             content="build_graph",
             metadata={
                 "action_type": "build_graph",
-                "force_rebuild": request.force_rebuild
+                "force_rebuild": build_request.force_rebuild
             }
         )
 
@@ -496,7 +511,8 @@ async def build_graph(request: GraphBuildRequest, api_key: str = Depends(verify_
 
 
 @app.post("/graph/query", response_model=GraphQueryResponse)
-async def query_graph(request: GraphQueryRequest, api_key: str = Depends(verify_api_key)):
+@limiter.limit(f"{settings.rate_limit_chat_per_minute}/minute")  # Similar to chat
+async def query_graph(request: Request, query_request: GraphQueryRequest, api_key: str = Depends(verify_api_key)):
     """Query knowledge graph."""
     try:
         memory_agent = MemoryAgent()
@@ -504,10 +520,10 @@ async def query_graph(request: GraphQueryRequest, api_key: str = Depends(verify_
         message = AgentMessage(
             from_agent=AgentType.USER,
             to_agent=AgentType.MEMORY,
-            content=request.query,
+            content=query_request.query,
             metadata={
                 "action_type": "query_graph",
-                "max_tokens": request.max_tokens
+                "max_tokens": query_request.max_tokens
             }
         )
 
@@ -541,6 +557,12 @@ async def root():
             "enabled": settings.api_key_enabled,
             "method": "API Key (X-API-Key header or api_key query param)",
             "public_endpoints": ["/", "/health"]
+        },
+        "rate_limiting": {
+            "enabled": settings.rate_limit_enabled,
+            "default": f"{settings.rate_limit_per_minute}/minute",
+            "chat": f"{settings.rate_limit_chat_per_minute}/minute",
+            "upload": f"{settings.rate_limit_upload_per_minute}/minute"
         },
         "endpoints": {
             "chat": "/chat/v2 (recommended), /chat/enhanced (legacy)",
