@@ -2,11 +2,12 @@
 Authentication module for Able2.
 
 Provides API key authentication for securing endpoints.
+Allows unauthenticated access from localhost for local development.
 """
 
 import secrets
 from typing import Optional
-from fastapi import HTTPException, Security, Depends
+from fastapi import HTTPException, Security, Depends, Request
 from fastapi.security import APIKeyHeader, APIKeyQuery
 from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_403_FORBIDDEN
 
@@ -14,9 +15,20 @@ from .config import settings
 from .logger import api_logger
 
 
+# Localhost addresses to trust
+LOCALHOST_ADDRESSES = {"127.0.0.1", "::1", "localhost"}
+
 # Support API key in header or query parameter
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 API_KEY_QUERY = APIKeyQuery(name="api_key", auto_error=False)
+
+
+def _is_localhost(request: Request) -> bool:
+    """Check if request is from localhost."""
+    if not request.client:
+        return False
+    client_host = request.client.host
+    return client_host in LOCALHOST_ADDRESSES
 
 
 def _verify_api_key(api_key: str) -> bool:
@@ -39,6 +51,7 @@ def _verify_api_key(api_key: str) -> bool:
 
 
 async def verify_api_key(
+    request: Request,
     header_key: Optional[str] = Security(API_KEY_HEADER),
     query_key: Optional[str] = Security(API_KEY_QUERY),
 ) -> str:
@@ -46,27 +59,33 @@ async def verify_api_key(
     Verify API key from header or query parameter.
 
     This is a FastAPI dependency that can be added to endpoints.
+    Allows unauthenticated access from localhost for local use.
 
     Args:
+        request: The FastAPI request object
         header_key: API key from X-API-Key header
         query_key: API key from api_key query parameter
 
     Returns:
-        The verified API key
+        The verified API key or "localhost" for local requests
 
     Raises:
-        HTTPException: If API key is missing or invalid
+        HTTPException: If API key is missing or invalid (non-localhost)
     """
     # Check if authentication is disabled (development only)
     if not settings.api_key_enabled:
         api_logger.warning("API key authentication is DISABLED")
         return "auth-disabled"
 
+    # Allow localhost requests without authentication
+    if _is_localhost(request):
+        return "localhost"
+
     # Get API key from header or query
     api_key = header_key or query_key
 
     if not api_key:
-        api_logger.warning("API request without API key")
+        api_logger.warning("API request without API key from external source")
         raise HTTPException(
             status_code=HTTP_401_UNAUTHORIZED,
             detail="API key required. Provide X-API-Key header or api_key query parameter.",
