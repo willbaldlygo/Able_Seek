@@ -2,18 +2,17 @@
 Execution Agent for Able2.
 
 Handles actions with side effects:
-- Web browsing (SearxNG)
-- Code execution (sandboxed)
-- Email sending
-- Calendar event creation
-- Task breakdown
-
-STATUS: Stub for Phase 1, full implementation in Phase 3
+- Web browsing (SearxNG) - Phase 1
+- Task breakdown - Phase 1
+- Code execution (sandboxed) - Phase 3
+- Email sending - Phase 2
+- Calendar event creation - Phase 2
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 from backend.schemas import AgentType, AgentMessage, AgentResponse, ActionType
-from backend.core import execution_logger
+from backend.core import execution_logger, settings
+from backend.integrations.searxng import SearxNGClient
 from .base_agent import BaseAgent
 
 
@@ -21,8 +20,16 @@ class ExecutionAgent(BaseAgent):
     """
     Execution Agent - handles actions with side effects.
 
-    Phase 1: Stub implementation
-    Phase 3: Full implementation with sandboxing
+    Phase 1 capabilities:
+    - Web search via SearxNG
+    - Task breakdown using LLM
+
+    Phase 2 additions:
+    - Email sending
+    - Calendar events
+
+    Phase 3 additions:
+    - Code execution (sandboxed)
     """
 
     def __init__(self):
@@ -32,7 +39,10 @@ class ExecutionAgent(BaseAgent):
             model_provider="anthropic"  # Use Claude for execution planning
         )
 
-        self.logger.info("Execution Agent initialized (Phase 1 stub)")
+        # Initialize SearxNG client
+        self.searxng = SearxNGClient()
+
+        self.logger.info(f"Execution Agent initialized (SearxNG: {self.searxng.enabled})")
 
     async def process(self, message: AgentMessage) -> AgentResponse:
         """
@@ -69,8 +79,6 @@ class ExecutionAgent(BaseAgent):
         """
         Browse web using SearxNG.
 
-        Phase 3 implementation.
-
         Args:
             message: Web browsing request
 
@@ -78,16 +86,91 @@ class ExecutionAgent(BaseAgent):
             Web search results
         """
         query = message.content
-        self.logger.info(f"Web browsing (stub): {query}")
+        max_results = message.metadata.get("max_results", 10)
 
-        return self.create_response(
-            success=True,
-            data={
-                "results": [],
-                "query": query
-            },
-            reasoning="[Phase 1 Stub] Web browsing coming in Phase 3 with SearxNG integration."
-        )
+        self.logger.info(f"Web search: {query}")
+
+        # Check if SearxNG is available
+        if not self.searxng.enabled:
+            return self.create_response(
+                success=False,
+                data={"query": query, "results": []},
+                error="Web search is disabled. Enable SearxNG in settings."
+            )
+
+        # Check availability
+        if not self.searxng.is_available():
+            return self.create_response(
+                success=False,
+                data={"query": query, "results": []},
+                error="SearxNG is not responding. Check if the service is running."
+            )
+
+        try:
+            # Perform search
+            results = await self.searxng.search(query, max_results=max_results)
+
+            if not results:
+                return self.create_response(
+                    success=True,
+                    data={
+                        "query": query,
+                        "results": [],
+                        "num_results": 0
+                    },
+                    reasoning="Search completed but no results found."
+                )
+
+            # Optionally summarize results using LLM
+            summarize = message.metadata.get("summarize", False)
+            summary = None
+
+            if summarize and results:
+                summary = await self._summarize_search_results(query, results)
+
+            self.log_action("browse_web", success=True, details=f"Found {len(results)} results")
+
+            return self.create_response(
+                success=True,
+                data={
+                    "query": query,
+                    "results": results,
+                    "num_results": len(results),
+                    "summary": summary
+                },
+                reasoning=f"Found {len(results)} web results for '{query}'"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Web search failed: {str(e)}")
+            return self.create_response(
+                success=False,
+                data={"query": query, "results": []},
+                error=f"Web search failed: {str(e)}"
+            )
+
+    async def _summarize_search_results(self, query: str, results: List[Dict[str, Any]]) -> str:
+        """Summarize search results using LLM."""
+        # Build context from results
+        results_text = ""
+        for i, result in enumerate(results[:5], 1):
+            results_text += f"{i}. {result.get('title', 'No title')}\n"
+            results_text += f"   {result.get('content', 'No content')[:200]}\n\n"
+
+        system_prompt = """Summarize these search results in 2-3 sentences.
+Focus on answering the user's query based on the search results.
+Be concise and factual."""
+
+        try:
+            summary = self.call_llm(
+                prompt=f"Query: {query}\n\nSearch Results:\n{results_text}\n\nSummary:",
+                system_prompt=system_prompt,
+                max_tokens=200
+            )
+            return summary.strip()
+        except Exception as e:
+            self.logger.warning(f"Failed to summarize results: {e}")
+            return None
 
     async def execute_code(self, message: AgentMessage) -> AgentResponse:
         """

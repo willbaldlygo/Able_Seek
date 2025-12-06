@@ -18,6 +18,7 @@ from backend.core import orchestrator_logger
 from .base_agent import BaseAgent
 from .memory_agent import MemoryAgent
 from .context_agent import ContextAgent
+from .execution_agent import ExecutionAgent
 
 
 class OrchestratorAgent(BaseAgent):
@@ -44,8 +45,7 @@ class OrchestratorAgent(BaseAgent):
         # Initialize sub-agents
         self.memory_agent = MemoryAgent()
         self.context_agent = ContextAgent()
-        # Execution agent initialized in Phase 3
-        self.execution_agent = None
+        self.execution_agent = ExecutionAgent()
 
         self.logger.info(f"Orchestrator initialized (autonomy={autonomy_level.value})")
 
@@ -186,16 +186,43 @@ EXPLANATION: <brief explanation>"""
         action_sequence = []
 
         if intent_type in ["search", "question", "find"]:
-            # Search action
-            actions.append(ActionType.SEARCH_DOCUMENTS)
+            # Check if web search is requested
+            if "web" in sources or intent_type == "web_search":
+                # Web search via Execution Agent
+                actions.append(ActionType.BROWSE_WEB)
+
+                action_sequence.append({
+                    "agent": AgentType.EXECUTION.value,
+                    "action": ActionType.BROWSE_WEB.value,
+                    "parameters": {
+                        "query": query,
+                        "max_results": 10,
+                        "summarize": True
+                    }
+                })
+            else:
+                # Document search via Memory Agent
+                actions.append(ActionType.SEARCH_DOCUMENTS)
+
+                action_sequence.append({
+                    "agent": AgentType.MEMORY.value,
+                    "action": ActionType.SEARCH_DOCUMENTS.value,
+                    "parameters": {
+                        "query": query,
+                        "sources": sources,
+                        "top_k": 10
+                    }
+                })
+
+        elif intent_type == "breakdown" or intent_type == "task":
+            # Task breakdown via Execution Agent
+            actions.append(ActionType.BREAK_DOWN_TASK)
 
             action_sequence.append({
-                "agent": AgentType.MEMORY.value,
-                "action": ActionType.SEARCH_DOCUMENTS.value,
+                "agent": AgentType.EXECUTION.value,
+                "action": ActionType.BREAK_DOWN_TASK.value,
                 "parameters": {
-                    "query": query,
-                    "sources": sources,
-                    "top_k": 10
+                    "task": query
                 }
             })
 
@@ -258,12 +285,7 @@ EXPLANATION: <brief explanation>"""
             elif agent_type == AgentType.CONTEXT:
                 response = await self.context_agent.process(message)
             elif agent_type == AgentType.EXECUTION:
-                # Phase 3
-                response = self.create_response(
-                    success=False,
-                    data={},
-                    error="Execution agent not implemented yet (Phase 3)"
-                )
+                response = await self.execution_agent.process(message)
             else:
                 response = self.create_response(
                     success=False,
