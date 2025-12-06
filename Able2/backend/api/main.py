@@ -19,7 +19,7 @@ ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.markdown', '.docx', '.doc'}
 
 from backend.core import (
     settings, api_logger, init_database,
-    check_database_connection, get_db
+    check_database_connection, get_db, verify_api_key
 )
 from backend.schemas import (
     ChatRequestV2, ChatResponseV2,
@@ -70,6 +70,18 @@ async def startup_event():
     else:
         api_logger.warning("Database connection failed")
 
+    # Log authentication status
+    if settings.api_key_enabled:
+        if settings.api_key:
+            api_logger.info("API key authentication ENABLED")
+        else:
+            api_logger.warning(
+                "API key authentication enabled but NO KEY SET! "
+                "Set ABLE2_API_KEY environment variable."
+            )
+    else:
+        api_logger.warning("API key authentication DISABLED - endpoints are unprotected!")
+
     api_logger.info("Able2 API started successfully")
 
 
@@ -101,7 +113,11 @@ async def health_check():
 # ============================================================================
 
 @app.post("/chat/v2", response_model=ChatResponseV2)
-async def chat_v2(request: ChatRequestV2, db: Session = Depends(get_db)):
+async def chat_v2(
+    request: ChatRequestV2,
+    db: Session = Depends(get_db),
+    api_key: str = Depends(verify_api_key)
+):
     """
     NEW orchestrator-based chat endpoint.
 
@@ -204,7 +220,11 @@ async def chat_v2(request: ChatRequestV2, db: Session = Depends(get_db)):
 # ============================================================================
 
 @app.post("/chat/enhanced", response_model=ChatResponseEnhanced)
-async def chat_enhanced(request: ChatRequestEnhanced, db: Session = Depends(get_db)):
+async def chat_enhanced(
+    request: ChatRequestEnhanced,
+    db: Session = Depends(get_db),
+    api_key: str = Depends(verify_api_key)
+):
     """
     Legacy Able1 enhanced chat endpoint.
     Uses hybrid retrieval directly without agent orchestration.
@@ -273,7 +293,10 @@ def validate_file_extension(filename: str) -> bool:
 
 
 @app.post("/upload", response_model=DocumentUploadResponse)
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(
+    file: UploadFile = File(...),
+    api_key: str = Depends(verify_api_key)
+):
     """
     Upload a document for processing.
 
@@ -341,7 +364,7 @@ async def upload_document(file: UploadFile = File(...)):
 
 
 @app.get("/documents", response_model=DocumentListResponse)
-async def list_documents():
+async def list_documents(api_key: str = Depends(verify_api_key)):
     """List all uploaded documents."""
     try:
         retriever = get_hybrid_retriever()
@@ -362,7 +385,7 @@ async def list_documents():
 
 
 @app.delete("/documents/{document_id}")
-async def delete_document(document_id: str):
+async def delete_document(document_id: str, api_key: str = Depends(verify_api_key)):
     """Delete a document."""
     try:
         memory_agent = MemoryAgent()
@@ -386,7 +409,7 @@ async def delete_document(document_id: str):
 # ============================================================================
 
 @app.get("/models", response_model=ModelListResponse)
-async def list_models():
+async def list_models(api_key: str = Depends(verify_api_key)):
     """List available LLM models."""
     models = [
         ModelInfo(
@@ -416,7 +439,7 @@ async def list_models():
 
 
 @app.post("/models/switch", response_model=ModelSwitchResponse)
-async def switch_model(request: ModelSwitchRequest):
+async def switch_model(request: ModelSwitchRequest, api_key: str = Depends(verify_api_key)):
     """Switch active LLM model."""
     # In Phase 1, this is informational only
     # Full switching requires runtime config updates
@@ -433,7 +456,7 @@ async def switch_model(request: ModelSwitchRequest):
 # ============================================================================
 
 @app.post("/graph/build", response_model=GraphBuildResponse)
-async def build_graph(request: GraphBuildRequest):
+async def build_graph(request: GraphBuildRequest, api_key: str = Depends(verify_api_key)):
     """Build or rebuild knowledge graph."""
     try:
         memory_agent = MemoryAgent()
@@ -473,7 +496,7 @@ async def build_graph(request: GraphBuildRequest):
 
 
 @app.post("/graph/query", response_model=GraphQueryResponse)
-async def query_graph(request: GraphQueryRequest):
+async def query_graph(request: GraphQueryRequest, api_key: str = Depends(verify_api_key)):
     """Query knowledge graph."""
     try:
         memory_agent = MemoryAgent()
@@ -514,6 +537,11 @@ async def root():
         "name": "Able2 API",
         "version": "2.0.0",
         "description": "Multi-agent AI assistant",
+        "authentication": {
+            "enabled": settings.api_key_enabled,
+            "method": "API Key (X-API-Key header or api_key query param)",
+            "public_endpoints": ["/", "/health"]
+        },
         "endpoints": {
             "chat": "/chat/v2 (recommended), /chat/enhanced (legacy)",
             "documents": "/upload, /documents, /documents/{id}",

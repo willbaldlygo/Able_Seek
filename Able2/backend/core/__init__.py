@@ -33,6 +33,12 @@ from .logger import (
     retrieval_logger,
 )
 
+from .auth import (
+    verify_api_key,
+    optional_api_key,
+    generate_api_key,
+)
+
 __all__ = [
     # Config
     "settings",
@@ -58,4 +64,8 @@ __all__ = [
     "api_logger",
     "database_logger",
     "retrieval_logger",
+    # Auth
+    "verify_api_key",
+    "optional_api_key",
+    "generate_api_key",
 ]

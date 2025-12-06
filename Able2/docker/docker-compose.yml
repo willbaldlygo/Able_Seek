@@ -104,6 +104,8 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       - SEARXNG_URL=http://searxng:8080
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?Anthropic API key required}
+      - ABLE2_API_KEY=${ABLE2_API_KEY:?API key required for authentication}
+      - API_KEY_ENABLED=${API_KEY_ENABLED:-true}
     volumes:
       - ../Able2:/app/Able2
       - ../config:/app/config

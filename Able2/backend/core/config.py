@@ -128,6 +128,10 @@ class Settings(BaseSettings):
     api_port: int = Field(8000, env="API_PORT")
     api_reload: bool = Field(True, env="API_RELOAD")
 
+    # Authentication
+    api_key: str = Field("", env="ABLE2_API_KEY")
+    api_key_enabled: bool = Field(True, env="API_KEY_ENABLED")
+
     cors_origins: List[str] = Field(
         ["http://localhost:3001", "http://127.0.0.1:3001"],
         env="CORS_ORIGINS"
