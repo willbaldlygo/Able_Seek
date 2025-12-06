@@ -5,6 +5,9 @@ Tests for:
 - File upload security (path traversal, file type, size limits)
 - Input validation
 - Error handling (no internal error exposure)
+
+Note: test_client fixture includes API key authentication.
+      Use unauthenticated_client for auth-related tests.
 """
 
 import pytest

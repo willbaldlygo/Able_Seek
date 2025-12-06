@@ -122,12 +122,28 @@ def mock_db_session():
 @pytest.fixture
 def test_client():
     """
-    Create a test client for FastAPI application.
+    Create an authenticated test client for FastAPI application.
 
     Usage:
         def test_endpoint(test_client):
             response = test_client.get("/health")
             assert response.status_code == 200
+    """
+    from fastapi.testclient import TestClient
+    from backend.api.main import app
+
+    with TestClient(app) as client:
+        # Add API key header to all requests
+        client.headers["X-API-Key"] = TEST_API_KEY
+        yield client
+
+
+@pytest.fixture
+def unauthenticated_client():
+    """
+    Create a test client WITHOUT authentication.
+
+    Useful for testing auth-related endpoints.
     """
     from fastapi.testclient import TestClient
     from backend.api.main import app
@@ -157,6 +173,10 @@ async def async_test_client():
 # Environment Fixtures
 # =============================================================================
 
+# Test API key for authenticated requests
+TEST_API_KEY = "test-api-key-12345-for-testing"
+
+
 @pytest.fixture(autouse=True)
 def mock_settings(monkeypatch):
     """
@@ -168,6 +188,10 @@ def mock_settings(monkeypatch):
 
     # Mock API keys (empty to prevent actual API calls)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+
+    # Set up test API key for authentication
+    monkeypatch.setenv("ABLE2_API_KEY", TEST_API_KEY)
+    monkeypatch.setenv("API_KEY_ENABLED", "true")
 
     # Mock paths
     monkeypatch.setenv("PATH_UPLOADS", "/tmp/able2_test_uploads")
