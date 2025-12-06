@@ -17,6 +17,7 @@ from backend.schemas import (
 from backend.core import orchestrator_logger
 from .base_agent import BaseAgent
 from .memory_agent import MemoryAgent
+from .context_agent import ContextAgent
 
 
 class OrchestratorAgent(BaseAgent):
@@ -42,8 +43,8 @@ class OrchestratorAgent(BaseAgent):
 
         # Initialize sub-agents
         self.memory_agent = MemoryAgent()
-        # Context and Execution agents initialized in Phase 2/3
-        self.context_agent = None
+        self.context_agent = ContextAgent()
+        # Execution agent initialized in Phase 3
         self.execution_agent = None
 
         self.logger.info(f"Orchestrator initialized (autonomy={autonomy_level.value})")
@@ -255,12 +256,7 @@ EXPLANATION: <brief explanation>"""
             if agent_type == AgentType.MEMORY:
                 response = await self.memory_agent.process(message)
             elif agent_type == AgentType.CONTEXT:
-                # Phase 2
-                response = self.create_response(
-                    success=False,
-                    data={},
-                    error="Context agent not implemented yet (Phase 2)"
-                )
+                response = await self.context_agent.process(message)
             elif agent_type == AgentType.EXECUTION:
                 # Phase 3
                 response = self.create_response(
