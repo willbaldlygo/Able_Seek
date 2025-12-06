@@ -8,8 +8,9 @@ Full GraphRAG with community detection in later phases.
 
 from typing import List, Dict, Any, Optional
 import networkx as nx
-import pickle
+import json
 from pathlib import Path
+from networkx.readwrite import json_graph
 
 from backend.core import settings, retrieval_logger
 
@@ -27,7 +28,9 @@ class GraphRAG:
         self.logger = retrieval_logger
         self.graph = nx.Graph()
 
-        self.graph_path = Path(settings.path_graph_store) / "knowledge_graph.pkl"
+        self.graph_path = Path(settings.path_graph_store) / "knowledge_graph.json"
+        # Legacy pickle path for migration
+        self._legacy_pickle_path = Path(settings.path_graph_store) / "knowledge_graph.pkl"
         self._load_graph()
 
         self.logger.info("Initialized GraphRAG")
@@ -200,31 +203,47 @@ class GraphRAG:
         }
 
     def _save_graph(self):
-        """Save graph to disk."""
+        """Save graph to disk using JSON (secure serialization)."""
         self.graph_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(self.graph_path, "wb") as f:
-            pickle.dump(self.graph, f)
+        # Convert graph to JSON-serializable format
+        graph_data = json_graph.node_link_data(self.graph)
 
-        self.logger.debug("Saved knowledge graph to disk")
+        with open(self.graph_path, "w", encoding="utf-8") as f:
+            json.dump(graph_data, f, indent=2, default=str)
+
+        self.logger.debug("Saved knowledge graph to disk (JSON format)")
 
     def _load_graph(self):
-        """Load graph from disk."""
-        if not self.graph_path.exists():
-            self.logger.debug("No existing knowledge graph found")
-            return
+        """Load graph from disk using JSON (secure deserialization)."""
+        # Try loading from JSON first
+        if self.graph_path.exists():
+            try:
+                with open(self.graph_path, "r", encoding="utf-8") as f:
+                    graph_data = json.load(f)
 
-        try:
-            with open(self.graph_path, "rb") as f:
-                self.graph = pickle.load(f)
+                self.graph = json_graph.node_link_graph(graph_data)
 
-            self.logger.info(
-                f"Loaded knowledge graph: "
-                f"{self.graph.number_of_nodes()} nodes, "
-                f"{self.graph.number_of_edges()} edges"
+                self.logger.info(
+                    f"Loaded knowledge graph: "
+                    f"{self.graph.number_of_nodes()} nodes, "
+                    f"{self.graph.number_of_edges()} edges"
+                )
+                return
+            except Exception as e:
+                self.logger.error(f"Failed to load knowledge graph from JSON: {str(e)}")
+
+        # Check for legacy pickle file and migrate if found
+        if self._legacy_pickle_path.exists():
+            self.logger.warning(
+                "Found legacy pickle graph file. "
+                "Please manually verify and migrate to JSON format for security. "
+                "Legacy pickle files will not be loaded automatically."
             )
-        except Exception as e:
-            self.logger.error(f"Failed to load knowledge graph: {str(e)}")
+            # Note: We intentionally do NOT load pickle files automatically
+            # as they pose a security risk (arbitrary code execution)
+
+        self.logger.debug("No existing knowledge graph found")
 
 
 # Global instance

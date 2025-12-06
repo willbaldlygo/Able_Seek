@@ -5,7 +5,7 @@ All agents inherit from this base class.
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
-import time
+import asyncio
 from datetime import datetime
 
 from backend.schemas import AgentType, AgentMessage, AgentResponse
@@ -147,7 +147,7 @@ class BaseAgent(ABC):
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt  # 1s, 2s, 4s, ...
                     self.logger.debug(f"Retrying in {wait_time}s...")
-                    time.sleep(wait_time)
+                    await asyncio.sleep(wait_time)
 
         # All retries failed
         self.logger.error(f"All retry attempts failed: {last_error}")

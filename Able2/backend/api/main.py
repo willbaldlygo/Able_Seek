@@ -8,8 +8,14 @@ from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import uuid
+import os
+import re
 from pathlib import Path
 from datetime import datetime
+
+# Security constants
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.markdown', '.docx', '.doc'}
 
 from backend.core import (
     settings, api_logger, init_database,
@@ -186,9 +192,11 @@ async def chat_v2(request: ChatRequestV2, db: Session = Depends(get_db)):
             }]
         )
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         api_logger.error(f"Chat v2 failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="An error occurred processing your request")
 
 
 # ============================================================================
@@ -232,14 +240,37 @@ async def chat_enhanced(request: ChatRequestEnhanced, db: Session = Depends(get_
             session_id=session_id
         )
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         api_logger.error(f"Chat enhanced failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="An error occurred processing your request")
 
 
 # ============================================================================
 # Document Management
 # ============================================================================
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitize filename to prevent path traversal and other attacks."""
+    # Get just the basename (removes any directory components)
+    filename = os.path.basename(filename)
+    # Remove any null bytes
+    filename = filename.replace('\x00', '')
+    # Remove or replace dangerous characters
+    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    # Limit length
+    if len(filename) > 255:
+        name, ext = os.path.splitext(filename)
+        filename = name[:255 - len(ext)] + ext
+    return filename
+
+
+def validate_file_extension(filename: str) -> bool:
+    """Check if file extension is allowed."""
+    ext = Path(filename).suffix.lower()
+    return ext in ALLOWED_EXTENSIONS
+
 
 @app.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(file: UploadFile = File(...)):
@@ -248,16 +279,41 @@ async def upload_document(file: UploadFile = File(...)):
 
     Supports PDF and text files.
     """
-    api_logger.info(f"Upload: {file.filename}")
+    # Sanitize filename for logging (don't log raw user input)
+    safe_display_name = sanitize_filename(file.filename or "unknown")
+    api_logger.info(f"Upload request: {safe_display_name}")
 
     try:
+        # Validate file extension
+        if not validate_file_extension(file.filename or ""):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
+            )
+
+        # Read content and check size
+        content = await file.read()
+        if len(content) > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size: {MAX_UPLOAD_SIZE // (1024*1024)}MB"
+            )
+
+        # Generate secure filename with UUID to prevent collisions and path traversal
+        original_ext = Path(file.filename or ".txt").suffix.lower()
+        secure_filename = f"{uuid.uuid4()}{original_ext}"
+
         # Save uploaded file
         upload_dir = Path(settings.path_uploads)
         upload_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = upload_dir / file.filename
+        file_path = upload_dir / secure_filename
+
+        # Verify the resolved path is still within upload_dir (defense in depth)
+        if not file_path.resolve().is_relative_to(upload_dir.resolve()):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
         with open(file_path, "wb") as f:
-            content = await file.read()
             f.write(content)
 
         # Process document through Memory Agent
@@ -268,16 +324,20 @@ async def upload_document(file: UploadFile = File(...)):
             return DocumentUploadResponse(
                 success=True,
                 document_id=response.data["document_id"],
-                filename=response.data["filename"],
+                filename=safe_display_name,  # Return sanitized original name
                 num_chunks=response.data["num_chunks"],
                 message="Document uploaded and processed successfully"
             )
         else:
-            raise HTTPException(status_code=500, detail=response.error)
+            # Don't expose internal error details
+            api_logger.error(f"Document processing failed: {response.error}")
+            raise HTTPException(status_code=500, detail="Document processing failed")
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         api_logger.error(f"Upload failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="An error occurred during upload")
 
 
 @app.get("/documents", response_model=DocumentListResponse)
@@ -294,9 +354,11 @@ async def list_documents():
             total_count=stats.get("vector_store", {}).get("document_count", 0)
         )
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         api_logger.error(f"List documents failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="An error occurred listing documents")
 
 
 @app.delete("/documents/{document_id}")
@@ -309,11 +371,14 @@ async def delete_document(document_id: str):
         if response.success:
             return {"success": True, "message": "Document deleted"}
         else:
-            raise HTTPException(status_code=500, detail=response.error)
+            api_logger.error(f"Delete document failed: {response.error}")
+            raise HTTPException(status_code=500, detail="Failed to delete document")
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         api_logger.error(f"Delete document failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="An error occurred deleting the document")
 
 
 # ============================================================================
@@ -397,11 +462,14 @@ async def build_graph(request: GraphBuildRequest):
                 build_time_seconds=0.0  # Not tracked in Phase 1
             )
         else:
-            raise HTTPException(status_code=500, detail=response.error)
+            api_logger.error(f"Graph build failed: {response.error}")
+            raise HTTPException(status_code=500, detail="Failed to build knowledge graph")
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         api_logger.error(f"Graph build failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="An error occurred building the graph")
 
 
 @app.post("/graph/query", response_model=GraphQueryResponse)
@@ -425,11 +493,14 @@ async def query_graph(request: GraphQueryRequest):
         if response.success:
             return GraphQueryResponse(**response.data)
         else:
-            raise HTTPException(status_code=500, detail=response.error)
+            api_logger.error(f"Graph query failed: {response.error}")
+            raise HTTPException(status_code=500, detail="Failed to query knowledge graph")
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         api_logger.error(f"Graph query failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="An error occurred querying the graph")
 
 
 # ============================================================================

@@ -15,12 +15,23 @@ from enum import Enum
 
 class ChatRequestV2(BaseModel):
     """Request schema for /chat/v2 (orchestrator-based chat)."""
-    message: str = Field(..., description="User's message/query")
-    session_id: Optional[str] = Field(None, description="Chat session ID")
+    message: str = Field(
+        ...,
+        description="User's message/query",
+        min_length=1,
+        max_length=50000  # Reasonable limit to prevent abuse
+    )
+    session_id: Optional[str] = Field(
+        None,
+        description="Chat session ID (UUID format)",
+        max_length=36,
+        pattern=r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$|^$'
+    )
     autonomy_level: str = Field("moderate", description="conservative, moderate, or aggressive")
     sources: Optional[List[str]] = Field(
         default=["documents"],
-        description="Sources to search: documents, emails, calendar"
+        description="Sources to search: documents, emails, calendar",
+        max_items=10
     )
     context: Optional[Dict[str, Any]] = Field(
         default={},
@@ -33,6 +44,17 @@ class ChatRequestV2(BaseModel):
         valid_levels = ["conservative", "moderate", "aggressive"]
         if v not in valid_levels:
             raise ValueError(f"autonomy_level must be one of {valid_levels}")
+        return v
+
+    @validator("sources")
+    def validate_sources(cls, v):
+        """Validate source list."""
+        if v is None:
+            return ["documents"]
+        valid_sources = {"documents", "emails", "calendar"}
+        for source in v:
+            if source not in valid_sources:
+                raise ValueError(f"Invalid source: {source}. Valid sources: {valid_sources}")
         return v
 
 
@@ -50,10 +72,10 @@ class ChatResponseV2(BaseModel):
 
 class ChatRequestEnhanced(BaseModel):
     """Request schema for /chat/enhanced (legacy Able1 endpoint)."""
-    message: str
-    session_id: Optional[str] = None
+    message: str = Field(..., min_length=1, max_length=50000)
+    session_id: Optional[str] = Field(None, max_length=36)
     use_graph: bool = True
-    top_k: int = 10
+    top_k: int = Field(10, ge=1, le=100, description="Number of results (1-100)")
 
 
 class ChatResponseEnhanced(BaseModel):
@@ -159,12 +181,14 @@ class GraphBuildResponse(BaseModel):
 
 class GraphQueryRequest(BaseModel):
     """Request to query knowledge graph."""
-    query: str = Field(..., description="Natural language query")
+    query: str = Field(..., description="Natural language query", min_length=1, max_length=10000)
     community_level: Optional[int] = Field(
         None,
-        description="Specific community level to query. None = use best level"
+        description="Specific community level to query. None = use best level",
+        ge=0,
+        le=10
     )
-    max_tokens: int = Field(1000, description="Max tokens for graph summary")
+    max_tokens: int = Field(1000, description="Max tokens for graph summary", ge=1, le=8000)
 
 
 class GraphQueryResponse(BaseModel):
@@ -181,12 +205,12 @@ class GraphQueryResponse(BaseModel):
 
 class MemorySearchRequest(BaseModel):
     """Direct request to Memory Agent."""
-    query: str
-    sources: List[str] = Field(default=["documents"])
-    top_k: int = 10
+    query: str = Field(..., min_length=1, max_length=10000)
+    sources: List[str] = Field(default=["documents"], max_items=10)
+    top_k: int = Field(10, ge=1, le=100)
     use_reranking: bool = True
     include_graph: bool = True
-    filters: Optional[Dict[str, Any]] = None
+    filters: Optional[Dict[str, Any]] = Field(None, description="Search filters")
 
 
 class MemorySearchResponse(BaseModel):

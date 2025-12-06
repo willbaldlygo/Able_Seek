@@ -3,8 +3,14 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Copy frontend files
-COPY frontend /app/frontend
+# Create non-root user for security
+RUN useradd -m -u 1000 -s /bin/bash appuser
+
+# Copy frontend files with proper ownership
+COPY --chown=appuser:appuser frontend /app/frontend
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 3001

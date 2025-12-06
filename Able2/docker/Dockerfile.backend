@@ -10,18 +10,28 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Copy requirements first for better caching
 COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create non-root user for security
+RUN useradd -m -u 1000 -s /bin/bash appuser
+
 # Copy application code
-COPY Able2/backend /app/backend
-COPY Able2/config /app/config
+COPY --chown=appuser:appuser Able2/backend /app/backend
+COPY --chown=appuser:appuser Able2/config /app/config
+
+# Create data directories with proper permissions
+RUN mkdir -p /app/data/uploads /app/data/vector_store /app/data/graph_store /app/logs \
+    && chown -R appuser:appuser /app
 
 # Set Python path
 ENV PYTHONPATH=/app
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8000

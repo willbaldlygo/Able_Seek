@@ -78,5 +78,5 @@ class SearxNGClient:
         try:
             response = requests.get(f"{self.base_url}/", timeout=5)
             return response.status_code == 200
-        except:
+        except (requests.RequestException, ConnectionError, TimeoutError):
             return False
