@@ -118,6 +118,8 @@ execution_logger = get_logger("execution_agent")
 api_logger = get_logger("api")
 database_logger = get_logger("database")
 retrieval_logger = get_logger("retrieval")
+request_logger = get_logger("request")
+security_logger = get_logger("security")
 
 
 __all__ = [
@@ -130,4 +132,6 @@ __all__ = [
     "api_logger",
     "database_logger",
     "retrieval_logger",
+    "request_logger",
+    "security_logger",
 ]

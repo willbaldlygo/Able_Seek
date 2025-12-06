@@ -48,6 +48,15 @@ from .rate_limit import (
     limit_custom,
 )
 
+from .request_logging import (
+    setup_request_logging,
+    log_security_event,
+    log_auth_failure,
+    log_rate_limit_hit,
+    request_logger,
+    security_logger,
+)
+
 __all__ = [
     # Config
     "settings",
@@ -84,4 +93,11 @@ __all__ = [
     "limit_chat",
     "limit_upload",
     "limit_custom",
+    # Request Logging
+    "setup_request_logging",
+    "log_security_event",
+    "log_auth_failure",
+    "log_rate_limit_hit",
+    "request_logger",
+    "security_logger",
 ]

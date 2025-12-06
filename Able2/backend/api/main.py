@@ -20,7 +20,8 @@ ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.markdown', '.docx', '.doc'}
 from backend.core import (
     settings, api_logger, init_database,
     check_database_connection, get_db, verify_api_key,
-    setup_rate_limiting, limiter, limit_chat, limit_upload, limit_default
+    setup_rate_limiting, limiter, limit_chat, limit_upload, limit_default,
+    setup_request_logging
 )
 from backend.schemas import (
     ChatRequestV2, ChatResponseV2,
@@ -54,6 +55,9 @@ app.add_middleware(
 
 # Setup rate limiting
 setup_rate_limiting(app)
+
+# Setup request logging (added last so it wraps all other middleware)
+setup_request_logging(app)
 
 # Initialize components on startup
 @app.on_event("startup")
